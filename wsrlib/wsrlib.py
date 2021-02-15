@@ -147,7 +147,7 @@ def test_prefix2key():
     print(fullkey)
     return
 
-def read_s3(name, fun=pyart.io.read_nexrad_archive):
+def read_s3(name, fun=pyart.io.read_nexrad_archive, **kwargs):
     bucket = 'noaa-nexrad-level2'
     
     s3 = boto3.client('s3')
@@ -156,7 +156,7 @@ def read_s3(name, fun=pyart.io.read_nexrad_archive):
     
     with tempfile.NamedTemporaryFile() as temp:
         s3.download_fileobj(bucket, key, temp)
-        radar = fun(temp.name)
+        radar = fun(temp.name, **kwargs)
         
     return radar
 
@@ -491,7 +491,48 @@ def get_tilts(radar):
     tilts = radar.fixed_angle['data']
     unique_tilts = np.unique(tilts)
     return tilts, unique_tilts
+
+# Not sure about this commented out function. I think it was a work-in-progress to
+# address a rendering bug. Reverting for now.
+#
+# def get_sweeps(radar, field):
+
+#     sweeps = []
+#     rng = radar.range['data']
     
+#     for i in range(radar.nsweeps):
+
+#         data = radar.get_field(i, field)
+        
+#         if np.all(data.mask): 
+#             # empty sweep
+#             continue
+
+#         # Convert to regular numpy array filled with NaNs
+#         data = np.ma.filled(data, fill_value=np.nan)
+        
+#         # Get data fields and sort by azimuth
+#         az = radar.get_azimuth(i)
+#         I = np.argsort(az)
+        
+#         az = az[I]
+#         elev = radar.get_elevation(i)[I]
+#         data = data[I,:]
+    
+#         sweeps[i] = {
+#             'data': data,
+#             'az': az,
+#             'rng': rng,
+#             'elev': elev,
+#             'fixed_angle': radar.fixed_angle['data'][i],
+#             'nyquist_vel' : radar.get_nyquist_vel(i),
+#             'unambiguous_range': get_unambiguous_range(radar, i),
+#             'sweepnum': i
+#         }
+
+#     return sweeps
+
+
 def get_sweeps(radar, field):
 
     tilts, unique_tilts = get_tilts(radar)
