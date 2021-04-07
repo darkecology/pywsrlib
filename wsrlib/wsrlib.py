@@ -8,6 +8,8 @@ import os.path
 import boto3
 import tempfile
 
+import re
+
 def aws_parse(name):
     '''
     Parse AWS key into constituent parts
@@ -37,6 +39,9 @@ def aws_parse(name):
     name = os.path.basename(name)
     name, ext = os.path.splitext(name)
 
+    if not re.match('[A-Z]{4}[0-9]{8}_[0-9]{6}.*', name):
+        raise ValueError(f'invalid key: {name}')
+        
     # example: KBGM20170421_025222
     return {
         'station': name[0:4],
@@ -101,16 +106,12 @@ def aws_key(s, suffix=''):
     
     return key
 
-# def test_aws_key():
-#     name = 'KBGM20170421_025222_V06'
-#     print(aws_key(name))
-
     
 def prefix2key(bucket, prefix):
     """
     Map prefix to a unique object
     
-    Returns error if there are multiple matches
+    Returns first match if there are multiple
 
     Parameters
     ----------
@@ -135,35 +136,27 @@ def prefix2key(bucket, prefix):
         for obj in response["Contents"]:
             key = obj["Key"]
     except KeyError:
-        return
-    
+        raise KeyError(f'AWS key with prefix {prefix} in bucket {bucket} not found')
+        
     return key
 
-
-def test_prefix2key():
-    bucket = 'noaa-nexrad-level2'
-    key = '2016/01/07/KBUF/KBUF20160107_121946'
-    fullkey = prefix2key(bucket, key)
-    print(fullkey)
-    return
-
-def read_s3(name, fun=pyart.io.read_nexrad_archive, **kwargs):
-    bucket = 'noaa-nexrad-level2'
+def get_s3(name, localfile=None):
+    if localfile is None:
+        localfile = os.path.basename(name) 
+    with open(localfile, 'wb') as f:
+        get_s3_fileobj(name, f)
     
-    s3 = boto3.client('s3')
+def get_s3_fileobj(name, fileobj):
+    bucket = 'noaa-nexrad-level2'
     key = aws_key(name)
     key = prefix2key(bucket, key)
-    
-    with tempfile.NamedTemporaryFile() as temp:
-        s3.download_fileobj(bucket, key, temp)
-        radar = fun(temp.name, **kwargs)
-        
-    return radar
+    boto3.client('s3').download_fileobj(bucket, key, fileobj)
 
-# def test_read_nexrad_archive_s3():
-#     name = 'KBUF20160107_121946_V06'
-#     radar = read_nexrad_archive_s3(name)
-#     print(radar.range['data'])
+def read_s3(key, fun=pyart.io.read_nexrad_archive, **kwargs):
+    with tempfile.NamedTemporaryFile() as temp:
+        get_s3_fileobj(key, temp)
+        radar = fun(temp.name, **kwargs)    
+    return radar
     
 
 def db(x):
@@ -309,15 +302,6 @@ def refl_to_z(eta, wavelength=0.1071):
     
     return z, dbz
 
-
-# def test_conversions():
-#     dbz = np.linspace(-15, 70, 100)
-#     z = idb(dbz)
-#     print(dbz - db(z))
-    
-#     eta, _ = z_to_refl(z)
-#     z2, _ = refl_to_z(eta)
-#     print(z - z2)
     
 def cart2pol(x, y):
     '''
@@ -492,63 +476,24 @@ def get_tilts(radar):
     unique_tilts = np.unique(tilts)
     return tilts, unique_tilts
 
-# Not sure about this commented out function. I think it was a work-in-progress to
-# address a rendering bug. Reverting for now.
-#
-# def get_sweeps(radar, field):
-
-#     sweeps = []
-#     rng = radar.range['data']
-    
-#     for i in range(radar.nsweeps):
-
-#         data = radar.get_field(i, field)
-        
-#         if np.all(data.mask): 
-#             # empty sweep
-#             continue
-
-#         # Convert to regular numpy array filled with NaNs
-#         data = np.ma.filled(data, fill_value=np.nan)
-        
-#         # Get data fields and sort by azimuth
-#         az = radar.get_azimuth(i)
-#         I = np.argsort(az)
-        
-#         az = az[I]
-#         elev = radar.get_elevation(i)[I]
-#         data = data[I,:]
-    
-#         sweeps[i] = {
-#             'data': data,
-#             'az': az,
-#             'rng': rng,
-#             'elev': elev,
-#             'fixed_angle': radar.fixed_angle['data'][i],
-#             'nyquist_vel' : radar.get_nyquist_vel(i),
-#             'unambiguous_range': get_unambiguous_range(radar, i),
-#             'sweepnum': i
-#         }
-
-#     return sweeps
-
 
 def get_sweeps(radar, field):
 
     tilts, unique_tilts = get_tilts(radar)
-    
+
+    arrays = [radar.get_field(i, field) for i in range(len(tilts))]
+    has_data = [not np.all(a.mask) for a in arrays]
     rng = radar.range['data']
 
-    # list of dicts w/ entries
-    #  az, rng, data
-
-    n = len(unique_tilts)
-
-    sweeps = [None] * n
+    sweeps = []
 
     for i, tilt in enumerate(unique_tilts):
-        matches = np.nonzero(tilts == tilt)[0]
-        nyq_vels = [radar.get_nyquist_vel(i) for i in matches]
+
+        matches = np.nonzero((tilts == tilt) & has_data)[0]
+        if matches.size == 0:
+            continue
+                
+        nyq_vels = [radar.get_nyquist_vel(i, check_uniform=False) for i in matches]
 
         # non-Doppler fields: pick the one with smallest prf
         if field in ['total_power',
@@ -557,7 +502,7 @@ def get_sweeps(radar, field):
                      'cross_correlation_ratio',
                      'differential_phase']: 
 
-            j = matches[np.argmin(nyq_vels)]   
+            j = matches[np.argmin(nyq_vels)]
 
         # Doppler fields: pick the one with largest prf
         elif field in ['velocity', 
@@ -570,7 +515,7 @@ def get_sweeps(radar, field):
 
         elev = radar.get_elevation(j)
         az = radar.get_azimuth(j)
-        unambiguous_range = get_unambiguous_range(radar, j) # not a class method
+        unambiguous_range = get_unambiguous_range(radar, j, check_uniform=False) # not a class method
         data = radar.get_field(j, field)
         
         # Convert to regular numpy array filled with NaNs
@@ -582,15 +527,17 @@ def get_sweeps(radar, field):
         elev = elev[I]
         data = data[I,:]
 
-        sweeps[i] = {
-            'data': data,
-            'az': az,
-            'rng': rng,
-            'elev': elev,
-            'fixed_angle': tilt,
-            'unambiguous_range': unambiguous_range,
-            'sweepnum': j
-        }
+        sweeps.append(
+            {
+                'data': data,
+                'az': az,
+                'rng': rng,
+                'elev': elev,
+                'fixed_angle': tilt,
+                'unambiguous_range': unambiguous_range,
+                'sweepnum': j
+            }
+        )
 
     return sweeps
 
@@ -740,7 +687,8 @@ def radar2mat_single(radar,
                      sweeps = None,
                      elevs  = None,
                      use_ground_range = True,
-                     interp_method='nearest'):
+                     interp_method='nearest',
+                     max_interp_dist = 1.0):
     
     '''Render a single radar file as a 3d array'''
     
@@ -775,29 +723,41 @@ def radar2mat_single(radar,
     else:
         raise ValueError("fields must be None or a list")
 
-        
-    ''' 
-    Get indices of desired sweeps (within unique sweeps), save in "sweeps" variable
-    '''
-    _, available_elevs = get_tilts(radar)
-    num_sweeps = len(available_elevs)
     
-    # Logic:
-    # 1. Use sweeps if specified
-    # 2. Otherwise use elevs
-    # 3. Otherwise get all sweeps
-    if sweeps:
-        elevs = available_elevs[sweeps]
-    elif elevs:
+    '''Get all sweeps for each field'''
+    sweepdata = {f: get_sweeps(radar, f) for f in fields}
+    
+    '''Get list of requested elevation angles'''
+    if elevs is not None:
+        requested_elevs = elevs   # user requested elevation angles
+    else:
+        # all available elevations (for first field)
+        first_field = fields[0]
+        requested_elevs = np.array([s['fixed_angle'] for s in sweepdata[first_field]])
+        
+        # subselect by sweep index if requested
+        if sweeps is not None:
+            requested_elevs = requested_elevs[sweeps]
+    
+    
+    '''Select sweeps for each field as close as possible
+       desired elevation angles'''
+    for f in fields:
+        available_elevs = np.array([s['fixed_angle'] for s in sweepdata[f]])
+
         # Use interp1d to map requested elevation to nearest available elevation
-        # and report the index
         inds = np.arange(len(available_elevs))
         elev2ind = interp1d(available_elevs, inds, kind='nearest', fill_value="extrapolate")
-        sweeps = elev2ind(elevs).astype(int)
-    else:
-        sweeps = np.arange(num_sweeps)
-        elevs = available_elevs
+        sweeps = np.array(elev2ind(requested_elevs).astype(int))
         
+        # Quality check
+        interp_dist = np.abs(available_elevs[sweeps] - requested_elevs)
+        if np.any(interp_dist > max_interp_dist):
+            raise ValueError('Failed to match at least one requested elevation')
+        
+        # Subselect the sweeps
+        sweepdata[f] = [sweepdata[f][i] for i in sweeps]
+
         
     '''
     Construct coordinate matrices PHI, R for query points
@@ -837,16 +797,11 @@ def radar2mat_single(radar,
     nsweeps = len(sweeps)
     
     for field in fields:
+    
         data[field] = np.empty((nsweeps, m, n))
         
-        thesweeps = get_sweeps(radar, field)  # all sweeps
-
-        for i in range(nsweeps):
-            
-            # get ith selected sweep
-            sweep_num = sweeps[i]
-            sweep = thesweeps[sweep_num]
-            
+        for i, sweep in enumerate(sweepdata[f]):
+                        
             az = sweep['az']
             rng = sweep['rng']
 
