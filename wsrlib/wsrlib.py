@@ -699,7 +699,8 @@ def radar2mat_single(radar,
     '''    
 
     # Get available fields
-    available_fields = list(radar.fields.keys())
+    available_fields = [f for f in VALID_FIELDS if f in radar.fields]
+    #available_fields = list(radar.fields.keys())  
     
     # Assemble list of fields to render, with error checking
     if fields is None:
@@ -722,11 +723,12 @@ def radar2mat_single(radar,
         
     else:
         raise ValueError("fields must be None or a list")
-
+    
+    #from IPython.core.debugger import set_trace; set_trace()
     
     '''Get all sweeps for each field'''
     sweepdata = {f: get_sweeps(radar, f) for f in fields}
-    
+
     '''Get list of requested elevation angles'''
     if elevs is not None:
         requested_elevs = elevs   # user requested elevation angles
@@ -742,6 +744,7 @@ def radar2mat_single(radar,
     
     '''Select sweeps for each field as close as possible
        desired elevation angles'''
+    selected_elevs = dict()
     for f in fields:
         available_elevs = np.array([s['fixed_angle'] for s in sweepdata[f]])
 
@@ -749,15 +752,16 @@ def radar2mat_single(radar,
         inds = np.arange(len(available_elevs))
         elev2ind = interp1d(available_elevs, inds, kind='nearest', fill_value="extrapolate")
         sweeps = np.array(elev2ind(requested_elevs).astype(int))
-        
+        selected_elevs[f] = available_elevs[sweeps]
+
         # Quality check
-        interp_dist = np.abs(available_elevs[sweeps] - requested_elevs)
+        interp_dist = np.abs(selected_elevs[f] - requested_elevs)
         if np.any(interp_dist > max_interp_dist):
             raise ValueError('Failed to match at least one requested elevation')
         
         # Subselect the sweeps
         sweepdata[f] = [sweepdata[f][i] for i in sweeps]
-
+ 
         
     '''
     Construct coordinate matrices PHI, R for query points
@@ -769,7 +773,7 @@ def radar2mat_single(radar,
         PHI, R = np.meshgrid(phi, r)
         
         # Coordinates of three dimensions in output array
-        x1 = elevs
+        x1 = selected_elevs[fields[0]]  # use actual elevations of first field
         x2 = r
         x3 = phi
  
@@ -780,25 +784,26 @@ def radar2mat_single(radar,
         PHI = pol2cmp(PHI)  # convert from radians to compass heading
         
         # Coordinates of three dimensions in output array
-        x1 = elevs
+        x1 = selected_elevs[fields[0]] # use actual elevations of first field
         x2 = y
         x3 = x
 
     else:
         raise ValueError("inavlid coords: %s" % (coords))
     
+    from collections import OrderedDict
     
     '''
     Build the output 3D arrays
     ''' 
-    data = dict()   
+    data = OrderedDict()   
     
     m,n = PHI.shape
     nsweeps = len(sweeps)
     
-    for field in fields:
+    for f in fields:
     
-        data[field] = np.empty((nsweeps, m, n))
+        data[f] = np.empty((nsweeps, m, n))
         
         for i, sweep in enumerate(sweepdata[f]):
                         
@@ -810,6 +815,7 @@ def radar2mat_single(radar,
             
             F = radarInterpolant(sweep['data'], az, rng, method=interp_method)
 
-            data[field][i,:,:] = F((PHI, R))
+            data[f][i,:,:] = F((PHI, R))
+    
     
     return data, x1, x2, x3
