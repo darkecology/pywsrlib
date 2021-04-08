@@ -850,7 +850,7 @@ NORMALIZERS = {
         'cross_correlation_ratio':   pltc.Normalize(vmin=   0, vmax=  1.1)
 }
 
-def mosaic(data, fields):
+def volume_mosaic(data, fields):
     '''
     Convert 4d radar data array into mosaic
 

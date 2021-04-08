@@ -211,14 +211,14 @@ def test_radar2mat_returns_expected_shape_legacy(legacy_radar):
     assert data.shape == (3, 5, 100, 100)
 
     
-from wsrlib import mosaic
-def test_mosaic_returns_expected_shape(dualpol_radar):
+from wsrlib import volume_mosaic
+def test_volume_mosaic_returns_expected_shape(dualpol_radar):
     data, fields, _, _, _ = radar2mat(dualpol_radar, 
                                       coords='cartesian', 
                                       elevs=[0.5, 1.5, 2.5, 3.5, 4.5], 
                                       dim=100, 
                                       r_max=150000)
-    mosaic_im = mosaic(data, fields)
+    mosaic_im = volume_mosaic(data, fields)
     assert mosaic_im.shape == (500, 600, 4)
         
 '''radar2mat with multiple radars'''
