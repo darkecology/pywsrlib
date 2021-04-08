@@ -148,22 +148,30 @@ def test_read_s3():
 '''Sweep selection'''
 from wsrlib import get_sweeps
 from wsrlib.testing import LEGACY_SCAN, DUALPOL_SCAN
-from pyart.io import read_nexrad_archive
 
-def test_get_sweeps():
-    radar = read_nexrad_archive(DUALPOL_SCAN)
+@pytest.fixture
+def dualpol_radar():
+    return pyart.io.read_nexrad_archive(DUALPOL_SCAN)
+
+@pytest.fixture
+def legacy_radar():
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return pyart.io.read_nexrad_archive(LEGACY_SCAN)
+
+def test_get_sweeps(dualpol_radar):
     
     for field in ['reflectivity', 
                   'differential_reflectivity', 
                   'cross_correlation_ratio',
                   'differential_phase']:
-        sweeps = get_sweeps(radar, field)
+        sweeps = get_sweeps(dualpol_radar, field)
         sweepnums = [sweep['sweepnum'] for sweep in sweeps]
         assert np.array_equal(sweepnums, [0, 2, 4, 6, 7])
 
     for field in ['velocity', 
                   'spectrum_width']:
-        sweeps = get_sweeps(radar, field)
+        sweeps = get_sweeps(dualpol_radar, field)
         sweepnums = [sweep['sweepnum'] for sweep in sweeps]
         assert np.array_equal(sweepnums, [1, 3, 5, 6, 7])
 
@@ -172,21 +180,53 @@ def test_get_sweeps():
 from wsrlib import radar2mat
 import warnings
 
-def test_radar2mat_raises_value_error_for_bad_field():
-    radar = read_nexrad_archive(DUALPOL_SCAN)
+def test_radar2mat_raises_value_error_for_bad_field(dualpol_radar):
     with pytest.raises(ValueError):
-        f = radar2mat(radar, fields=['reflectivity', 'foo'])
+        f = radar2mat(dualpol_radar, fields=['reflectivity', 'foo'])
 
-def test_radar2mat_warns_if_field_unavailable():
-    
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        radar = read_nexrad_archive(LEGACY_SCAN)
-    
+def test_radar2mat_warns_if_field_unavailable(legacy_radar):
+        
     with pytest.warns(UserWarning):
-        f = radar2mat(radar, fields=['differential_reflectivity', 'velocity'])
+        radar2mat(legacy_radar, fields=['differential_reflectivity', 'velocity'])
 
-def test_radar2mat_value_error_if_bad_coords():
-    radar = read_nexrad_archive(DUALPOL_SCAN)
+def test_radar2mat_value_error_if_bad_coords(dualpol_radar):
     with pytest.raises(ValueError):
-        f = radar2mat(radar, coords='foo')
+        f = radar2mat(dualpol_radar, coords='foo')
+
+
+def test_radar2mat_returns_expected_shape_dualpol(dualpol_radar):
+    data, fields, _, _, _ = radar2mat(dualpol_radar, 
+                                      coords='cartesian', 
+                                      elevs=[0.5, 1.5, 2.5, 3.5, 4.5], 
+                                      dim=100, 
+                                      r_max=150000)
+    assert data.shape == (6, 5, 100, 100)
+
+def test_radar2mat_returns_expected_shape_legacy(legacy_radar):
+    data, fields, _, _, _ = radar2mat(legacy_radar, 
+                                      coords='cartesian', 
+                                      elevs=[0.5, 1.5, 2.5, 3.5, 4.5], 
+                                      dim=100, 
+                                      r_max=150000)
+    assert data.shape == (3, 5, 100, 100)
+
+    
+from wsrlib import mosaic
+def test_mosaic_returns_expected_shape(dualpol_radar):
+    data, fields, _, _, _ = radar2mat(dualpol_radar, 
+                                      coords='cartesian', 
+                                      elevs=[0.5, 1.5, 2.5, 3.5, 4.5], 
+                                      dim=100, 
+                                      r_max=150000)
+    mosaic_im = mosaic(data, fields)
+    assert mosaic_im.shape == (500, 600, 4)
+        
+'''radar2mat with multiple radars'''
+from wsrlib.testing import CANADA_IRIS_DOPVOL_FILES
+import pyart
+def test_radar2mat_with_multiple_radars_returns_expected_shape():
+    radars = [pyart.io.read(f) for f in CANADA_IRIS_DOPVOL_FILES]
+    data, _, _, _, _ = radar2mat(radars, coords='cartesian', dim=200, r_max=150000)
+    assert data.shape == (3, 3, 200, 200)
+
+    

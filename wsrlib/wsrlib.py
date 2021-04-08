@@ -1,13 +1,18 @@
 import numpy as np
-import pyart
-import warnings
+import numpy.ma as ma
 from scipy.interpolate import interp1d, RegularGridInterpolator
-from more_itertools.more import always_iterable
 
-import os.path
+import pyart
+
 import boto3
-import tempfile
 
+import matplotlib.pyplot as plt
+import matplotlib.colors as pltc
+
+import warnings
+from more_itertools.more import always_iterable
+import os.path
+import tempfile
 import re
 
 def aws_parse(name):
@@ -649,23 +654,29 @@ def radarInterpolant( data, az, rng, method="nearest"):
 
 
 
-def radar2mat(radars, **kwargs):
-    '''Render one or more radar files as a 3d array'''
+def radar2mat(radars,
+              axis=1,
+              as_dict=False, 
+              **kwargs):
+    '''Render one or more radar files as a 4d array'''
     
+    #from IPython.core.debugger import set_trace; set_trace()
+
     radars = always_iterable(radars)
+    results = [radar2mat_single(r, **kwargs) for r in radars]
+        
+    data = np.concatenate([r[0] for r in results], axis=axis) 
     
-    DATA, X1, X2, X3 = radar2mat_single(next(radars), **kwargs)
-        
-    for r in radars:
-        data, x1, x2, x3 = radar2mat_single(r, **kwargs)        
-        X1 = np.concatenate((X1, x1))
-        X2 = np.concatenate((X2, x2))
-        X3 = np.concatenate((X3, x3))
-        
-        for f in DATA.keys():
-            DATA[f] = np.concatenate((DATA[f], data[f]))
-            
-    return DATA, X1, X2, X3
+    # coords = (fields, elev, y, x) or (fields, elev, range, azimuth)
+    coords = list(results[0][1:])
+    coords[axis] = np.concatenate([r[axis] for r in results])
+
+    if as_dict:
+        fields = coords[1]
+        data = {f: v for f, v in zip(fields, data)}
+    
+    return (data,) + tuple(coords)
+    
 
 
 VALID_FIELDS = ['reflectivity',
@@ -723,12 +734,10 @@ def radar2mat_single(radar,
         
     else:
         raise ValueError("fields must be None or a list")
-    
-    #from IPython.core.debugger import set_trace; set_trace()
-    
+        
     '''Get all sweeps for each field'''
     sweepdata = {f: get_sweeps(radar, f) for f in fields}
-
+    
     '''Get list of requested elevation angles'''
     if elevs is not None:
         requested_elevs = elevs   # user requested elevation angles
@@ -747,20 +756,27 @@ def radar2mat_single(radar,
     selected_elevs = dict()
     for f in fields:
         available_elevs = np.array([s['fixed_angle'] for s in sweepdata[f]])
-
-        # Use interp1d to map requested elevation to nearest available elevation
-        inds = np.arange(len(available_elevs))
-        elev2ind = interp1d(available_elevs, inds, kind='nearest', fill_value="extrapolate")
-        sweeps = np.array(elev2ind(requested_elevs).astype(int))
-        selected_elevs[f] = available_elevs[sweeps]
-
-        # Quality check
-        interp_dist = np.abs(selected_elevs[f] - requested_elevs)
-        if np.any(interp_dist > max_interp_dist):
-            raise ValueError('Failed to match at least one requested elevation')
         
-        # Subselect the sweeps
-        sweepdata[f] = [sweepdata[f][i] for i in sweeps]
+        # available and requested are the same, no interpolation needed
+        if (len(available_elevs) == len(requested_elevs) and
+                np.allclose(available_elevs, requested_elevs)):
+
+            selected_elevs[f] = available_elevs
+            
+        # Use interp1d to map requested elevation to nearest available elevation
+        else:
+            inds = np.arange(len(available_elevs))
+            elev2ind = interp1d(available_elevs, inds, kind='nearest', fill_value="extrapolate")
+            sweeps = np.array(elev2ind(requested_elevs).astype(int))
+            selected_elevs[f] = available_elevs[sweeps]
+
+            # Quality check
+            interp_dist = np.abs(selected_elevs[f] - requested_elevs)
+            if np.any(interp_dist > max_interp_dist):
+                raise ValueError('Failed to match at least one requested elevation')
+
+            # Subselect the sweeps
+            sweepdata[f] = [sweepdata[f][i] for i in sweeps]
  
         
     '''
@@ -796,14 +812,15 @@ def radar2mat_single(radar,
     '''
     Build the output 3D arrays
     ''' 
-    data = OrderedDict()   
+    data = list()   
     
     m,n = PHI.shape
-    nsweeps = len(sweeps)
     
     for f in fields:
     
-        data[f] = np.empty((nsweeps, m, n))
+        nsweeps = len(sweepdata[f])    
+
+        fdata = np.empty((nsweeps, m, n))
         
         for i, sweep in enumerate(sweepdata[f]):
                         
@@ -815,7 +832,55 @@ def radar2mat_single(radar,
             
             F = radarInterpolant(sweep['data'], az, rng, method=interp_method)
 
-            data[f][i,:,:] = F((PHI, R))
+            fdata[i,:,:] = F((PHI, R))
+            
+        data.append(fdata)
     
+    data = np.stack(data)
     
-    return data, x1, x2, x3
+    return data, fields, x1, x2, x3
+
+
+NORMALIZERS = {
+        'reflectivity':              pltc.Normalize(vmin=  -5, vmax= 35),
+        'velocity':                  pltc.Normalize(vmin= -15, vmax= 15),
+        'spectrum_width':            pltc.Normalize(vmin=   0, vmax= 10),
+        'differential_reflectivity': pltc.Normalize(vmin=  -4, vmax=  8),
+        'differential_phase':        pltc.Normalize(vmin=   0, vmax=250),
+        'cross_correlation_ratio':   pltc.Normalize(vmin=   0, vmax=  1.1)
+}
+
+def mosaic(data, fields):
+    '''
+    Convert 4d radar data array into mosaic
+
+    Parameters
+    ----------
+    data: array
+        Four-dimensional data array from radar2mat, with shape
+        (n_fields, n_elevs, h, w)
+    fields: list
+        list of field names
+    
+    Returns
+    -------
+    mosaic: array
+        An image mosaic showing the entire radar scan, with rows
+        corresponding to elevations, and columns to radar fields.
+        The array represents and RGB image and has shape
+        (n_elevs * h, n_fields * w, 3)
+
+    '''
+    rgb = list()
+
+    for i, f in enumerate(fields):
+        cm = plt.get_cmap(pyart.config.get_field_colormap(f))
+        norm = NORMALIZERS[f]
+        imdata = ma.masked_invalid(data[i])
+        imdata = norm(imdata)
+        imdata = np.flip(imdata, 1)
+        rgb.append(cm(imdata))
+
+    mosaic = np.hstack([np.vstack(im) for im in rgb])
+
+    return mosaic
