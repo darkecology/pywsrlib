@@ -666,16 +666,18 @@ def radar2mat(radars,
     results = [radar2mat_single(r, **kwargs) for r in radars]
         
     data = np.concatenate([r[0] for r in results], axis=axis) 
+    coords = [r[1:] for r in results]
     
-    # coords = (fields, elev, y, x) or (fields, elev, range, azimuth)
-    coords = list(results[0][1:])
-    coords[axis] = np.concatenate([r[axis] for r in results])
+    # coords[i] = (fields, elev, y, x) or (fields, elev, range, azimuth)
+    
+    combined_coords = list(coords[0])
+    combined_coords[axis] = np.concatenate([r[axis] for r in coords])
 
     if as_dict:
         fields = coords[1]
         data = {f: v for f, v in zip(fields, data)}
     
-    return (data,) + tuple(coords)
+    return (data,) + tuple(combined_coords)
     
 
 
@@ -697,21 +699,23 @@ def radar2mat_single(radar,
                      dim    = 600,        # num pixels on a side in Cartesian rendering
                      sweeps = None,
                      elevs  = None,
+                     ydirection = 'xy',
                      use_ground_range = True,
                      interp_method='nearest',
                      max_interp_dist = 1.0):
     
     '''Render a single radar file as a 3d array'''
     
-    
-    
     '''
     Input parsing and checking
     '''    
+        
+    if ydirection not in ['xy', 'ij']:
+        raise ValueError(f"Invalid ydirection {ydirection}. Must be 'xy' or 'ij'")
+    
 
     # Get available fields
     available_fields = [f for f in VALID_FIELDS if f in radar.fields]
-    #available_fields = list(radar.fields.keys())  
     
     # Assemble list of fields to render, with error checking
     if fields is None:
@@ -795,6 +799,9 @@ def radar2mat_single(radar,
  
     elif coords == 'cartesian':
         x = y = np.linspace (-r_max, r_max, dim)
+        if ydirection == 'ij':
+            y = np.flip(y)
+
         [X, Y] = np.meshgrid(x, y)
         [PHI, R] = cart2pol(X, Y)
         PHI = pol2cmp(PHI)  # convert from radians to compass heading
@@ -803,7 +810,7 @@ def radar2mat_single(radar,
         x1 = selected_elevs[fields[0]] # use actual elevations of first field
         x2 = y
         x3 = x
-
+        
     else:
         raise ValueError("inavlid coords: %s" % (coords))
     
