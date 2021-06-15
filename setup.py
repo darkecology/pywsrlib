@@ -9,8 +9,13 @@ setup(
     author='Dan Sheldon',
     author_email='sheldon@cs.umass.edu',
     install_requires=[
-        'arm_pyart',
-        'boto3'
+        'arm_pyart', # arm-pyart-1.11.5
+        'boto3', # boto3-1.17.87
+        'netCDF4==1.5.6',
+        'scipy==1.5.4',
+        'matplotlib==3.3.4',
+        'pandas==1.1.5',
+        'more-itertools==8.7.0',
     ],
     keywords='radar aeroecology ecology weather',
     license='MIT'
