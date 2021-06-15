@@ -420,10 +420,7 @@ def slant2ground( r, theta ):
     From Doviak and Zrnic 1993 Eqs. (2.28b) and (2.28c)
     
     See also
-    https://bitbucket.org/deeplycloudy/lmatools/src/3ad332f9171e/coordinateSystems.py?at=default
-    
-    See Also
-    --------
+    https://github.com/deeplycloudy/lmatools/blob/master/lmatools/coordinateSystems.py#L258
     pyart.core.antenna_to_cartesian
     '''
     
@@ -440,6 +437,139 @@ def slant2ground( r, theta ):
     return s, z
 
 
+def ground2slant(s, h):
+    '''
+    Convert from slant range and elevation to ground range and height.
+    
+    r: array
+        Range along radar path in m
+
+    Parameters
+    ----------
+    s: array
+        Range along ground (m, great circle distance)
+    h: array
+        height above earth (m)
+
+    Returns
+    -------
+    r: array
+        range along radar path (m)
+    thet: array
+        elevation angle in degrees
+
+
+    Uses spherical earth with radius 6371.2 km
+    
+    From Doviak and Zrnic 1993 Eqs. (2.28b) and (2.28c)
+    
+    See also https://github.com/deeplycloudy/lmatools/blob/master/lmatools/coordinateSystems.py#L286
+    '''
+
+    earth_radius = 6371200.0           # from NARR GRIB file
+    multiplier = 4.0 / 3.0
+
+    r_e = earth_radius * multiplier    # earth effective radius
+
+    
+    '''
+    Law of cosines of triangle ABC
+    
+    A = center of earth
+    B = radar station
+    C = pulse volume
+    
+    d(A,B) = r_e
+    d(B,C) = r
+    d(A,C) = r_e + h
+    thet(AB,AC) = s/r_e
+    
+    If the elevation angle is zero, the ray BC is exactly perpendicular to
+    AB, so ABC is a right triangle.
+    
+    If the elevation angle is positive, ABC is obtuse.
+    
+    If the elevation angle is negative, ABC is acute. 
+    
+    We can use this to detect negative elevation angles.
+    '''
+
+    r  = np.sqrt(r_e**2 + (r_e+h)**2 - 2*(r_e+h) * r_e * np.cos(s/r_e))
+    thet = np.arccos((r_e + h) * np.sin(s/r_e) / r)
+    thet = np.array(np.rad2deg(thet))
+    
+    is_acute = (r_e + h)**2 < r_e**2 + r**2
+    
+    thet = np.array(thet)
+    thet[is_acute] *= -1
+    thet = thet + 0.  # this converts it back from array to scalar if it was originally scalar
+    
+    return r, thet
+
+
+def xyz2radar( x, y, z ):
+    '''
+    Convert (x, y, z) to (elev, rng, az)
+    
+    Parameters
+    ----------
+    x: array
+        x coordinates in meters from radar
+    y: array
+        y coordinates in meters from radar
+    z: array
+        z coordinates in meters above radar
+        
+    Returns
+    -------
+    elev: array
+        elevation angle in degrees
+    rng: array
+        range along radar path in metersx
+    az: array
+        azimuth in degrees
+    '''
+
+    # Get azimuth and ground (great circle) distance
+    az, s = cart2pol(x, y)
+    az = pol2cmp(az)
+    
+    # Now get slant range of each pixel on this elevation
+    rng, elev = ground2slant(s, z)
+
+    return elev, rng, az    
+    
+
+def radar2xyz( elev, rng, az ):
+    '''
+    Convert (elev, rng, az) to (x, y, z)
+
+    Parameters
+    ----------
+    elev: array
+        elevation angle in degrees
+    rng: array
+        range along radar path in meters
+    az: array
+        azimuth in degrees
+
+    Returns
+    ----------
+    x: array
+        x coordinates in meters from radar
+    y: array
+        y coordinates in meters from radar
+    z: array
+        z coordinates in meters above radar
+
+    '''
+    
+    ground_range, z = slant2ground(rng, elev)
+    phi = cmp2pol(az)
+    x, y = pol2cart(phi, ground_range)
+    return x, y, z
+
+    
 def get_unambiguous_range(self, sweep, check_uniform=True):
     """
     Return the unambiguous range in meters for a given sweep.
@@ -653,6 +783,57 @@ def radarInterpolant( data, az, rng, method="nearest"):
                                    fill_value=np.nan)
 
 
+def radarVolumeInterpolant(data, elev, rng, az, elev_buffer=0.25, method="nearest"):
+        
+    I = np.argsort(az)
+    az = az[I]
+    data = data.copy()[:,:,I]
+
+    # Replicate first and last radials on opposite ends of array
+    # to correctly handle wrapping
+    az   = np.hstack((az[-1]-360, az, az[0]+360))
+            
+    data = np.concatenate((data[:,:,-1,None],
+                           data,
+                           data[:,:,0,None]), axis=2)
+        
+    # Ensure strict monotonicity
+    delta = np.hstack((0, np.diff(az)))   # difference between previous and this
+    
+    az = az + np.where(delta==0, 0.001, 0.0)  # add small amount to each azimuth that
+                                              #  is the same as predecessor
+
+    # Replicate first and last elevations offset by elev_buffer to 
+    # allow limited extrapolation
+    elev = np.hstack((elev[0]-elev_buffer, elev, elev[-1]+elev_buffer))
+    data = np.concatenate((data[None,0,:,:],
+                           data,
+                           data[None,-1,:,:]))
+        
+    # Create interpolating function
+    return RegularGridInterpolator((elev, rng, az), data, 
+                                   method=method,
+                                   bounds_error=False,
+                                   fill_value=np.nan)
+
+
+class Grid():
+    
+    def __init__(self, grid):
+        self.grid = grid
+
+    def coords(self):
+        return [np.linspace(*g) for g in self.grid]
+
+    def points(self, indexing='xy'):
+        return np.stack(np.meshgrid(*self.coords(), indexing=indexing)) 
+
+    def shape(self):
+        return np.array([g[2] for g in self.grid])
+
+    def size(self):
+        return np.prod([g[2] for g in self.grid])
+
 
 def radar2mat(radars,
               axis=1,
@@ -788,8 +969,8 @@ def radar2mat_single(radar,
     '''    
     if coords == 'polar':
         # Query points
-        r   = np.arange(r_min, r_max, r_res)
-        phi = np.arange(az_res, 360, az_res)
+        r   = np.arange(r_min, r_max + r_res, r_res)
+        phi = np.arange(0., 360, az_res)
         PHI, R = np.meshgrid(phi, r)
         
         # Coordinates of three dimensions in output array
