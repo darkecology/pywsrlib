@@ -5,6 +5,7 @@ from scipy.interpolate import interp1d, RegularGridInterpolator
 import pyart
 
 import boto3
+import urllib
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as pltc
@@ -162,7 +163,15 @@ def read_s3(key, fun=pyart.io.read_nexrad_archive, **kwargs):
         get_s3_fileobj(key, temp)
         radar = fun(temp.name, **kwargs)    
     return radar
-    
+
+def read_http(name, fun=pyart.io.read_nexrad_archive, **kwargs):
+    with tempfile.NamedTemporaryFile() as temp:
+        key = aws_key(name)
+        key = prefix2key('noaa-nexrad-level2', key)
+        url = f"http://noaa-nexrad-level2.s3.amazonaws.com/{key}"
+        urllib.request.urlretrieve(url, temp.name)
+        radar = fun(temp.name, **kwargs)    
+    return radar
 
 def db(x):
 
