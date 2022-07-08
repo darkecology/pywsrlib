@@ -864,7 +864,7 @@ def radar2mat(radars,
     combined_coords[axis] = np.concatenate([r[axis] for r in coords])
 
     if as_dict:
-        fields = coords[1]
+        fields = coords[0][0]
         data = {f: v for f, v in zip(fields, data)}
     
     return (data,) + tuple(combined_coords)
