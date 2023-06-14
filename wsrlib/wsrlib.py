@@ -636,30 +636,36 @@ def get_sweeps(radar, field):
         matches = np.nonzero((tilts == tilt) & has_data)[0]
         if matches.size == 0:
             continue
-                
-        nyq_vels = [radar.get_nyquist_vel(i, check_uniform=False) for i in matches]
 
-        # non-Doppler fields: pick the one with smallest prf
-        if field in ['total_power',
-                     'reflectivity', 
-                     'differential_reflectivity',
-                     'cross_correlation_ratio',
-                     'differential_phase']: 
+        '''Use nyquist velocity to obtain a single sweep for one tilt'''
+        j = 0 
+        if matches.size > 1:
+            nyq_vels = [radar.get_nyquist_vel(i, check_uniform=False) for i in matches]
 
-            j = matches[np.argmin(nyq_vels)]
+            # non-Doppler fields: pick the one with smallest prf
+            if field in ['total_power',
+                        'reflectivity', 
+                        'differential_reflectivity',
+                        'cross_correlation_ratio',
+                        'differential_phase']: 
 
-        # Doppler fields: pick the one with largest prf
-        elif field in ['velocity', 
-                       'spectrum_width']:
+                j = matches[np.argmin(nyq_vels)]
 
-            j = matches[np.argmax(nyq_vels)]
+            # Doppler fields: pick the one with largest prf
+            elif field in ['velocity', 
+                        'spectrum_width']:
 
+                j = matches[np.argmax(nyq_vels)]
+
+            else:
+                raise ValueError("Invalid field")
+        
         else:
-            raise ValueError("Invalid field")
+            j = matches[0]
 
         elev = radar.get_elevation(j)
         az = radar.get_azimuth(j)
-        unambiguous_range = get_unambiguous_range(radar, j, check_uniform=False) # not a class method
+
         data = radar.get_field(j, field)
         
         # Convert to regular numpy array filled with NaNs
@@ -671,17 +677,20 @@ def get_sweeps(radar, field):
         elev = elev[I]
         data = data[I,:]
 
-        sweeps.append(
-            {
+        sweep = {
                 'data': data,
                 'az': az,
                 'rng': rng,
                 'elev': elev,
                 'fixed_angle': tilt,
-                'unambiguous_range': unambiguous_range,
                 'sweepnum': j
             }
-        )
+        
+        if radar.instrument_parameters is not None:
+            unambiguous_range = get_unambiguous_range(radar, j, check_uniform=False) # not a class method
+            sweep['unambiguous_range'] = unambiguous_range
+        
+        sweeps.append(sweep)
 
     return sweeps
 
