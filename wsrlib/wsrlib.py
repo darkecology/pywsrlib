@@ -775,6 +775,8 @@ def get_volumes(radar, field='reflectivity', coords='antenna'):
 def radarInterpolant( data, az, rng, method="nearest"):
         
     m, n = data.shape
+
+    az = np.mod(az, 360) # map angles into [0, 360]
     
     I = np.argsort(az)
     az = az[I]
@@ -802,7 +804,9 @@ def radarInterpolant( data, az, rng, method="nearest"):
 
 
 def radarVolumeInterpolant(data, elev, rng, az, elev_buffer=0.25, method="nearest"):
-        
+
+    az = np.mod(az, 360) # map angles into [0, 360]
+    
     I = np.argsort(az)
     az = az[I]
     data = data.copy()[:,:,I]
@@ -878,7 +882,6 @@ def radar2mat(radars,
     
     return (data,) + tuple(combined_coords)
     
-
 
 VALID_FIELDS = ['reflectivity',
                 'velocity',
@@ -1033,6 +1036,8 @@ def radar2mat_single(radar,
             az = sweep['az']
             rng = sweep['rng']
 
+            az = np.mod(az, 360) # map angles into [0, 360]
+            
             if use_ground_range:
                 rng, _ = slant2ground(rng, sweep['fixed_angle'])
             
