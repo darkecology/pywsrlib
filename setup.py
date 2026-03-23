@@ -10,11 +10,11 @@ setup(
     author_email='sheldon@cs.umass.edu',
     install_requires=[
         'arm_pyart==1.11.5',
-        'boto3', # boto3-1.17.87
+        'boto3==1.37.38',
         'netCDF4==1.5.6',
         'scipy==1.5.4',
         'matplotlib==3.3.4',
-        'pandas', # pandas-1.1.5
+        'pandas==2.0.3', # pandas-1.1.5
         'more-itertools==8.7.0',
     ],
     keywords='radar aeroecology ecology weather',
