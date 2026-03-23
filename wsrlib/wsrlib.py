@@ -153,7 +153,7 @@ def get_s3(name, localfile=None):
         get_s3_fileobj(name, f)
     
 def get_s3_fileobj(name, fileobj):
-    bucket = 'noaa-nexrad-level2'
+    bucket = 'unidata-nexrad-level2'
     key = aws_key(name)
     key = prefix2key(bucket, key)
     boto3.client('s3').download_fileobj(bucket, key, fileobj)
@@ -167,8 +167,8 @@ def read_s3(key, fun=pyart.io.read_nexrad_archive, **kwargs):
 def read_http(name, fun=pyart.io.read_nexrad_archive, **kwargs):
     with tempfile.NamedTemporaryFile() as temp:
         key = aws_key(name)
-        key = prefix2key('noaa-nexrad-level2', key)
-        url = f"http://noaa-nexrad-level2.s3.amazonaws.com/{key}"
+        key = prefix2key('unidata-nexrad-level2', key)
+        url = f"http://unidata-nexrad-level2.s3.amazonaws.com/{key}"
         urllib.request.urlretrieve(url, temp.name)
         radar = fun(temp.name, **kwargs)    
     return radar
