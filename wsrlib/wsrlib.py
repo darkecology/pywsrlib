@@ -5,6 +5,8 @@ from scipy.interpolate import interp1d, RegularGridInterpolator
 import pyart
 
 import boto3
+from botocore import UNSIGNED
+from botocore.config import Config
 import urllib
 
 import matplotlib.pyplot as plt
@@ -112,8 +114,12 @@ def aws_key(s, suffix=''):
     
     return key
 
-    
-def prefix2key(bucket, prefix):
+def _s3_client(anonymous=False):
+    if anonymous:
+        return boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    return boto3.client("s3")
+
+def prefix2key(bucket, prefix, anonymous=False):
     """
     Map prefix to a unique object
     
@@ -125,13 +131,15 @@ def prefix2key(bucket, prefix):
         The bucket
     prefix: string
         The object prefix
+    anonymous: bool
+        If True, use unsigned requests (no credentials needed for public buckets)
         
     Returns
     -------
     obj: string
         The name of the object
     """
-    s3 = boto3.client("s3")
+    s3 = _s3_client(anonymous=anonymous)
     response = s3.list_objects_v2(Bucket = bucket,
                                   Prefix = prefix,
                                   MaxKeys = 1)
@@ -152,11 +160,11 @@ def get_s3(name, localfile=None):
     with open(localfile, 'wb') as f:
         get_s3_fileobj(name, f)
     
-def get_s3_fileobj(name, fileobj):
+def get_s3_fileobj(name, fileobj, anonymous=True):
     bucket = 'unidata-nexrad-level2'
     key = aws_key(name)
-    key = prefix2key(bucket, key)
-    boto3.client('s3').download_fileobj(bucket, key, fileobj)
+    key = prefix2key(bucket, key, anonymous=anonymous)
+    _s3_client(anonymous=anonymous).download_fileobj(bucket, key, fileobj)
 
 def read_s3(key, fun=pyart.io.read_nexrad_archive, **kwargs):
     with tempfile.NamedTemporaryFile() as temp:
@@ -164,10 +172,10 @@ def read_s3(key, fun=pyart.io.read_nexrad_archive, **kwargs):
         radar = fun(temp.name, **kwargs)    
     return radar
 
-def read_http(name, fun=pyart.io.read_nexrad_archive, **kwargs):
+def read_http(name, fun=pyart.io.read_nexrad_archive, anonymous=True, **kwargs):
     with tempfile.NamedTemporaryFile() as temp:
         key = aws_key(name)
-        key = prefix2key('unidata-nexrad-level2', key)
+        key = prefix2key('unidata-nexrad-level2', key, anonymous=anonymous)
         url = f"http://unidata-nexrad-level2.s3.amazonaws.com/{key}"
         urllib.request.urlretrieve(url, temp.name)
         radar = fun(temp.name, **kwargs)    
